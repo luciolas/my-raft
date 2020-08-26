@@ -1,3 +1,14 @@
+// Master controller
+
+// The master controller is a simple, centralised orchestrator to assist in
+// collecting raft information and re-disseminate them to every other server.
+// It also manages the KV servers and help them to connect to their
+// partner raft servers.
+
+//(Not implemented)
+// It also serves as the main orchestrator for add,remove and partition servers
+//(Not implemented)
+
 package main
 
 import (
@@ -41,18 +52,18 @@ func initClients() (clients []*controller.ClientController) {
 
 func main() {
 	con := controller.NewController(config.NRaftServers)
-	metric := controller.MakeMetricController(12800)
-	metric.Init()
-	metric.Start()
+	// metric := controller.MakeMetricController("localhost", 12800)
+	// metric.Init()
+	// metric.Start()
 	con.Init()
 
 	go con.Serve()
 
-	go func() {
-		initRaftServers()
-		initKVServers()
-		initClients()
-	}()
+	// go func() {
+	// 	initRaftServers()
+	// 	initKVServers()
+	// 	initClients()
+	// }()
 
 	// _ = initRaftServers()
 	// _ = initKVServers()

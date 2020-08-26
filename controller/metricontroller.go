@@ -148,7 +148,7 @@ func (c *MetricController) Init() {
 	c.StartEchoService()
 }
 
-func MakeMetricController(port int) *MetricController {
+func MakeMetricController(addr string, port int) *MetricController {
 	c := &MetricController{}
 	c.Started = &raftData.AtBool{}
 	c.metric = data.AllMetrics{
@@ -159,8 +159,8 @@ func MakeMetricController(port int) *MetricController {
 	c.metricChangeChnl = make(chan bool, 1)
 	c.wsConn = make(map[string]*websocket.Conn)
 	var addrBuilder strings.Builder
-
-	addrBuilder.WriteString("localhost:")
+	addrBuilder.Write(addr)
+	addrBuilder.WriteString(":")
 	addrBuilder.WriteString(strconv.FormatInt(int64(port), 10))
 	addr := addrBuilder.String()
 	baseURL := url.URL{
