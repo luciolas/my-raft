@@ -14,6 +14,7 @@ package main
 import (
 	"echoRaft/config"
 	"echoRaft/controller"
+	"flag"
 )
 
 func initRaftServers() (raftServers []*controller.RaftController) {
@@ -50,25 +51,44 @@ func initClients() (clients []*controller.ClientController) {
 	return
 }
 
+var (
+	NServers = flag.Int("servers", 3, "number of raft servers")
+)
+
 func main() {
-	con := controller.NewController(config.NRaftServers)
+	flag.Parse()
+	con := controller.NewController(*NServers)
 	// metric := controller.MakeMetricController("localhost", 12800)
 	// metric.Init()
 	// metric.Start()
 	con.Init()
 
-	go con.Serve()
+	// go con.Serve()
+	con.Serve()
 
 	// go func() {
 	// 	initRaftServers()
 	// 	initKVServers()
 	// 	initClients()
 	// }()
-
 	// _ = initRaftServers()
 	// _ = initKVServers()
 	// _ = initClients()
 
-	con.Wait()
+	// con.Wait()
+
+	// sigs := make(chan os.Signal, 1)
+	// done := make(chan bool, 1)
+
+	// // listen to sig kill ,terminate, abort and interrupt
+	// signal.Notify(sigs, syscall.SIGINT, syscall.SIGKILL, syscall.SIGABRT, syscall.SIGTERM)
+	// // Kill signal wait function
+	// go func() {
+	// 	sig := <-sigs
+	// 	fmt.Println(sig)
+	// 	done <- true
+	// }()
+
+	// <-done
 
 }

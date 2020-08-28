@@ -142,7 +142,7 @@ func (wrs *WSConnection) wsWriter() {
 		select {
 		case outgoing := <-wrs.writeChnl:
 			if err := wrs.Ws.WriteJSON(outgoing); err != nil {
-				wrs.Ec.Logger.Fatal(err)
+				wrs.Ec.Logger.Error(err)
 				return
 			}
 		}
@@ -215,7 +215,10 @@ func (wrs *WSConnection) WriteAndReceive(arg interface{}, reply interface{}) {
 		wrs.mu.Lock()
 		runningConnection := wrs.aRunningConnections[writeObj.Idx]
 		wrs.mu.Unlock()
-		wrs.writeChnl <- writeObj
+		select {
+		case wrs.writeChnl <- writeObj:
+		default:
+		}
 		replyInterface := <-runningConnection
 		replyObj := replyInterface.(*internalConnection)
 		replybytes, err := json.Marshal(replyObj.Reply)
@@ -250,6 +253,16 @@ func (wrs *WSConnection) Close() {
 	wrs.Ws.Close()
 	close(wrs.writeChnl)
 	close(wrs.readChnl)
+	wrs.mu.Lock()
+	defer wrs.mu.Unlock()
+	for _, conn := range wrs.aRunningConnections {
+		select {
+		case conn <- struct{}{}:
+			close(conn)
+		default:
+		}
+	}
+	wrs.uRunningConnections.Set(0)
 }
 
 func NewWsConnection(ws *websocket.Conn, ec *echo.Echo, readHandler interface{}) (wrs *WSConnection) {

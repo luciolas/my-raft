@@ -194,6 +194,8 @@ func (c *Controller) Init() {
 	c.Stop = make(chan struct{}, 1)
 
 }
+
+// Serve is blocking
 func (c *Controller) Serve() {
 	// TODO: restart tries and restart delay
 	c.ec.Logger.Fatal(c.ec.Start(":65000"))

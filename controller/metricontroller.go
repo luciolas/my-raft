@@ -159,13 +159,13 @@ func MakeMetricController(addr string, port int) *MetricController {
 	c.metricChangeChnl = make(chan bool, 1)
 	c.wsConn = make(map[string]*websocket.Conn)
 	var addrBuilder strings.Builder
-	addrBuilder.Write(addr)
+	addrBuilder.WriteString(addr)
 	addrBuilder.WriteString(":")
 	addrBuilder.WriteString(strconv.FormatInt(int64(port), 10))
-	addr := addrBuilder.String()
+	host := addrBuilder.String()
 	baseURL := url.URL{
 		Scheme: "http",
-		Host:   addr,
+		Host:   host,
 	}
 	c.BoundMethods = make(map[string]url.URL)
 	baseURL.Path = "api/metric/v1/rpccount"
@@ -185,6 +185,6 @@ func MakeMetricController(addr string, port int) *MetricController {
 		Jar:           nil,
 		Timeout:       15 * time.Second,
 	}
-	c.Addr = addr
+	c.Addr = host
 	return c
 }

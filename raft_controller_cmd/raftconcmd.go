@@ -19,6 +19,15 @@ var (
 )
 
 func main() {
+	flag.Parse()
+
+	if *masterFlag == "" {
+		*masterFlag = "localhost:65000"
+	}
+	if *metricFlag == "" {
+		*metricFlag = "localhost:12800"
+	}
+	fmt.Println(*portFlag)
 	raftServer := controller.MakeRaftController2(*hostFlag, *portFlag)
 	raftServer.Init()
 

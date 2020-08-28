@@ -19,6 +19,7 @@ var (
 )
 
 func main() {
+	flag.Parse()
 	server := controller.MakeKVRaftController(*hostFlag, *portFlag)
 	server.Init()
 

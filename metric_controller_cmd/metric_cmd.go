@@ -21,6 +21,7 @@ var (
 )
 
 func main() {
+	flag.Parse()
 	metric := controller.MakeMetricController(*hostFlag, *portFlag)
 	metric.Init()
 	metric.Start()
