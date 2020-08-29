@@ -21,7 +21,7 @@ func initRaftServers() (raftServers []*controller.RaftController) {
 	raftServers = make([]*controller.RaftController, config.NRaftServers)
 	startPort := config.RaftServerStartPort
 	for i := 0; i < config.NRaftServers; i++ {
-		raftServers[i] = controller.MakeRaftController2("localhost", startPort)
+		raftServers[i] = controller.MakeRaftController("localhost", startPort)
 		raftServers[i].Init()
 		startPort++
 	}
@@ -58,24 +58,24 @@ var (
 func main() {
 	flag.Parse()
 	con := controller.NewController(*NServers)
-	// metric := controller.MakeMetricController("localhost", 12800)
-	// metric.Init()
-	// metric.Start()
+	metric := controller.MakeMetricController("localhost", 12800)
+	metric.Init()
+	metric.Start()
 	con.Init()
 
-	// go con.Serve()
-	con.Serve()
+	go con.Serve()
+	// con.Serve()
 
-	// go func() {
-	// 	initRaftServers()
-	// 	initKVServers()
-	// 	initClients()
-	// }()
+	go func() {
+		initRaftServers()
+		initKVServers()
+		initClients()
+	}()
 	// _ = initRaftServers()
 	// _ = initKVServers()
 	// _ = initClients()
 
-	// con.Wait()
+	con.Wait()
 
 	// sigs := make(chan os.Signal, 1)
 	// done := make(chan bool, 1)

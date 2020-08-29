@@ -15,19 +15,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/labstack/echo-contrib/prometheus"
 	"github.com/labstack/echo/v4"
 )
 
 type RaftController struct {
 	data.ControllerData
-	raftServer  *raft.Raft
-	persister   *raft.Persister
-	wsConn      map[string]*data.WSConnection
-	mu          sync.Mutex
-	raftClients []*data.RClient
+	raftServer *raft.Raft
+	persister  *raft.Persister
+	wsConn     map[string]*data.WSConnection
+	mu         sync.Mutex
 
+	raftClients  []*data.RClient
+	iraftClients []data.RaftKVClient
+
+	// Stores methods that are readily to be bound to an API service
 	raftControlServices map[string]*service.Service
 }
 
@@ -52,7 +54,8 @@ func (rc *RaftController) StartRaftAPI(args data.StartServerArg, reply *common.C
 	}
 }
 
-func (rc *RaftController) InitKVServer(args data.RaftConnectDetails, reply *common.CommonReply) {
+//InitKVServerInfo initialize the KV server connection information (Does not connect to it yet)
+func (rc *RaftController) InitKVServerInfo(args data.RaftConnectDetails, reply *common.CommonReply) {
 	fullAddr := strings.Join([]string{args.Addr, strconv.Itoa(args.Port)}, ":")
 	baseurl := url.URL{
 		Scheme: "http",
@@ -62,7 +65,8 @@ func (rc *RaftController) InitKVServer(args data.RaftConnectDetails, reply *comm
 	rc.BoundMethods["RaftKV.Apply"] = baseurl
 }
 
-func (rc *RaftController) InitRaftServer(rcd data.ConnectMasterReply, reply *common.CommonReply) {
+// InitRaftPeers initialize peers' information
+func (rc *RaftController) InitRaftPeers(rcd data.ConnectMasterReply, reply *common.CommonReply) {
 	rc.Me = rcd.Id
 	// Init an interface that has Call
 	connectionDetails := rcd.Peers
@@ -86,10 +90,26 @@ func (rc *RaftController) InitRaftServer(rcd data.ConnectMasterReply, reply *com
 
 }
 
+// StartRaftServer begins the Raft heartbeat connection
 func (rc *RaftController) StartRaftServer(args common.CommonReply, reply *common.CommonReply) {
-	rc.StartRaft2()
+	rc.StartRaft()
 }
 
+func (rc *RaftController) connectToMetricController() {
+	metricControllerURL := url.URL{}
+	metricControllerURL.Host = strings.Join([]string{common.MetricControllerAddr, strconv.Itoa(common.MetricControllerPort)}, ":")
+	metricControllerURL.Path = "api/metric/v1/rpccount"
+	metricControllerURL.Scheme = "ws"
+	wsconn, err := data.DialNewWSConnection(metricControllerURL, rc.Ec, nil, nil)
+	if err != nil {
+		rc.Ec.Logger.Error(err)
+	} else {
+		rc.raftClients[rc.Me].WsMethods["MetricController.Metrics"] = wsconn
+	}
+}
+
+// StartWebsocket will initialize its own ID (from Master controller) and initialize connection
+// with peers
 func (rc *RaftController) StartWebsocket(rcd data.ConnectMasterReply, reply *common.CommonReply) {
 	headers := make(http.Header)
 	headers.Add("X-Server-Idx", strconv.Itoa(rc.Me))
@@ -110,25 +130,16 @@ func (rc *RaftController) StartWebsocket(rcd data.ConnectMasterReply, reply *com
 			}
 		}
 	}
-	metricControllerURL := url.URL{}
-	metricControllerURL.Host = strings.Join([]string{common.MetricControllerAddr, strconv.Itoa(common.MetricControllerPort)}, ":")
-	metricControllerURL.Path = "api/metric/v1/rpccount"
-	metricControllerURL.Scheme = "ws"
-	wsconn, err := data.DialNewWSConnection(metricControllerURL, rc.Ec, nil, nil)
-	if err != nil {
-		rc.Ec.Logger.Error(err)
-	} else {
-		rc.raftClients[rc.Me].WsMethods["MetricController.Metrics"] = wsconn
-	}
+
+	go rc.connectToMetricController()
 }
 
-func (rc *RaftController) API_Heartbeat() echo.HandlerFunc {
+// API_WSInitPeerConn Init a receiving WS handshake and upgrades it
+func (rc *RaftController) API_WSInitPeerConn() echo.HandlerFunc {
 	return func(e echo.Context) error {
 		if sIdx := e.Request().Header.Get("X-Server-Idx"); sIdx != "" {
 			ws, err := upgrader.Upgrade(e.Response(), e.Request(), nil)
 			if err != nil {
-				// TODO :Remove print
-				// rc.Ec.Logger.Error(err)
 				return err
 			}
 			idx, err := strconv.Atoi(sIdx)
@@ -144,7 +155,7 @@ func (rc *RaftController) API_Heartbeat() echo.HandlerFunc {
 	}
 }
 
-func (rc *RaftController) StartEchoService() {
+func (rc *RaftController) startEchoService() {
 	p := prometheus.NewPrometheus("echo", nil)
 	p.Use(rc.Ec)
 	go func(rc *RaftController) {
@@ -165,25 +176,27 @@ func (rc *RaftController) StartEchoService() {
 	}(rc)
 }
 
+// Init starts an Echo service and serves (non-blocking)
 func (rc *RaftController) Init() {
 	rc.raftControlServices = service.MakeService(rc, 0)
 
-	rc.Ec.GET("/"+rc.BoundMethods["Raft.WSHeartBeat"].Path, rc.API_Heartbeat())
+	rc.Ec.GET("/"+rc.BoundMethods["Raft.WSHeartBeat"].Path, rc.API_WSInitPeerConn())
 
 	for _, val := range rc.raftControlServices["RaftController"].SvcMethodName {
 		if v, ok := rc.BoundMethods[val]; ok {
 			rc.Ec.POST("/"+v.Path, common.APIFunction(val, rc.raftControlServices))
 		}
 	}
-	rc.StartEchoService()
+	rc.startEchoService()
 }
 
-func (rc *RaftController) StartRaft2() {
-	var iclients []data.RaftKVClient = make([]data.RaftKVClient, len(rc.raftClients))
+// StartRaft will create an instance of the raft logic and begin operations
+func (rc *RaftController) StartRaft() {
+	rc.iraftClients = make([]data.RaftKVClient, len(rc.raftClients))
 	for i, v := range rc.raftClients {
-		iclients[i] = v
+		rc.iraftClients[i] = v
 	}
-	rc.raftServer = raft.Make(iclients, rc.Me, rc.persister, nil)
+	rc.raftServer = raft.Make(rc.iraftClients, rc.Me, rc.persister, nil)
 	rc.Services = service.MakeService(rc.raftServer, 0)
 	if len(rc.Services) == 0 {
 		log.Fatal("No services found\n")
@@ -210,26 +223,7 @@ func (rc *RaftController) StartRaft2() {
 
 }
 
-func (rc *RaftController) StartRaft(raftservers []data.RaftKVClient) {
-
-	rc.raftServer = raft.Make(raftservers, rc.Me, rc.persister, nil)
-	rc.Services = service.MakeService(rc.raftServer, 0)
-	if len(rc.Services) == 0 {
-		log.Fatal("No services found\n")
-	}
-}
-
-func (rc *RaftController) CreateWS(bURL url.URL, svcName string, readHandler interface{}) *data.WSConnection {
-	c, _, err := websocket.DefaultDialer.Dial(bURL.String(), nil)
-	if err != nil {
-		log.Fatal("dial: ", err)
-	}
-	wsconnect := data.NewWsConnection(c, rc.Ec, readHandler)
-	rc.wsConn[svcName] = wsconnect
-	return wsconnect
-}
-
-func MakeRaftController2(host string, port int) *RaftController {
+func MakeRaftController(host string, port int) *RaftController {
 	addr := strings.Join([]string{host, strconv.Itoa(port)}, ":")
 	c := &RaftController{}
 	c.Started = &raftData.AtBool{}
@@ -253,7 +247,7 @@ func MakeRaftController2(host string, port int) *RaftController {
 	c.BoundMethods["Raft.ReturnState"] = baseURL
 
 	baseURL.Path = "raft/v1/internal/init_raft_server"
-	c.BoundMethods["RaftController.InitRaftServer"] = baseURL
+	c.BoundMethods["RaftController.InitRaftPeers"] = baseURL
 	initRaftURLString := baseURL.String()
 
 	baseURL.Path = "raft/v1/internal/start_websockets"
@@ -265,7 +259,7 @@ func MakeRaftController2(host string, port int) *RaftController {
 	raftServerStartString := baseURL.String()
 
 	baseURL.Path = "raft/v1/internal/init_kv_server"
-	c.BoundMethods["RaftController.InitKVServer"] = baseURL
+	c.BoundMethods["RaftController.InitKVServerInfo"] = baseURL
 	initKVServerString := baseURL.String()
 
 	baseURL.Path = "raft/v1/internal/stop"
@@ -307,58 +301,3 @@ func MakeRaftController2(host string, port int) *RaftController {
 
 	return c
 }
-
-// func MakeRaftController(addr string, me int, kvraftController *KVRaftController) *RaftController {
-// 	c := &RaftController{}
-// 	c.Started = &raftData.AtBool{}
-// 	c.Ec = echo.New()
-// 	c.wsConn = make(map[string]*data.WSConnection)
-// 	c.BoundMethods = make(map[string]url.URL)
-// 	baseURL := url.URL{
-// 		Scheme: "http",
-// 		Host:   addr,
-// 	}
-// 	baseURL.Path = "raft/v1/election"
-// 	c.BoundMethods["Raft.RequestVote"] = baseURL
-
-// 	baseURL.Path = "raft/v1/heartbeat"
-// 	c.BoundMethods["Raft.HeartBeat"] = baseURL
-
-// 	baseURL.Path = "raft/v1/agree"
-// 	c.BoundMethods["Raft.Agree"] = baseURL
-
-// 	baseURL.Path = "raft/v1/internal/stop"
-// 	c.BoundMethods["RaftController.StopRaftAPI"] = baseURL
-
-// 	baseURL.Path = "raft/v1/internal/start"
-// 	c.BoundMethods["RaftController.StartRaftAPI"] = baseURL
-
-// 	// Special case
-// 	baseURL.Host = kvraftController.Addr
-// 	baseURL.Path = "api/kvraft/v1/apply"
-// 	c.BoundMethods["RaftKV.Apply"] = baseURL
-
-// 	baseURL.Host = strings.Join([]string{common.MetricControllerAddr, strconv.Itoa(common.MetricControllerPort)}, ":")
-// 	baseURL.Path = "api/metric/v1/rpccount"
-// 	baseURL.Scheme = "ws"
-// 	c.BoundMethods["MetricController.Metrics"] = baseURL
-// 	c.CreateWS(baseURL, "MetricController.Metrics", nil)
-
-// 	baseURL.Host = strings.Join([]string{common.MasterControllerAddr, strconv.Itoa(common.MasterControllerPort)}, ":")
-// 	baseURL.Path = common.MasterControllerRaftServerAPI
-// 	baseURL.Scheme = "ws"
-// 	c.BoundMethods["Controller.AddServer"] = baseURL
-// 	// c.CreateWS(baseURL, "Controller.AddServer", "all", c.WSMasterReadHandler())
-// 	c.Client = &http.Client{
-// 		Transport:     &http.Transport{},
-// 		CheckRedirect: nil,
-// 		Jar:           nil,
-// 		Timeout:       15 * time.Second,
-// 	}
-
-// 	c.Addr = addr
-// 	c.Me = me
-// 	c.persister = &raft.Persister{}
-
-// 	return c
-// }

@@ -28,7 +28,7 @@ func main() {
 		*metricFlag = "localhost:12800"
 	}
 	fmt.Println(*portFlag)
-	raftServer := controller.MakeRaftController2(*hostFlag, *portFlag)
+	raftServer := controller.MakeRaftController(*hostFlag, *portFlag)
 	raftServer.Init()
 
 	sigs := make(chan os.Signal, 1)
